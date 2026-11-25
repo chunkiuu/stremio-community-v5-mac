@@ -135,7 +135,7 @@ static void EnsureDirectory(const std::string &path) {
 //   1. --portable-config=<path>
 //   2. $STREMIO_PORTABLE_CONFIG
 //   3. <bundle parent>/portable_config (truly portable .app)
-//   4. ~/Library/Application Support/Stremio/portable_config (default)
+//   4. ~/Library/Application Support/Stremio Community M5 Test/portable_config (default)
 void ResolveShellPaths(int argc, char *argv[]) {
   NSString *exePath = [[NSBundle mainBundle] executablePath];
   if (exePath) {
@@ -170,7 +170,7 @@ void ResolveShellPaths(int argc, char *argv[]) {
     if (IsDirectory(portable.string())) {
       g_configDir = portable.string();
     } else {
-      g_configDir = HomeDirectory() + "/Library/Application Support/Stremio/portable_config";
+      g_configDir = HomeDirectory() + "/Library/Application Support/Stremio Community M5 Test/portable_config";
     }
   }
   bool configExisted = IsDirectory(g_configDir);

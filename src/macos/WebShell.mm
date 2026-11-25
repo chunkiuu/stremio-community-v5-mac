@@ -979,12 +979,19 @@ void StartReachabilityThread() {
     std::string foundUrl = GetFirstReachableUrl();
 
     std::string resolved = foundUrl;
-    if (g_uiProxyEnabled) {
-      std::string localBase = StartLocalUiProxy(foundUrl);
-      if (!localBase.empty()) {
-        resolved = localBase;
-      } else {
-        std::cout << "[PROXY]: Not used for this endpoint" << std::endl;
+    if (g_uiProxyEnabled && !foundUrl.empty()) {
+      resolved = StartLocalUiProxy(foundUrl);
+      if (resolved.empty()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          NSAlert *alert = [[NSAlert alloc] init];
+          alert.messageText = @"Could not start the local Stremio web interface";
+          alert.informativeText = @"Quit any other copy of this Stremio build and reopen it. "
+                                  @"If the problem continues, check the proxy error in the app log.";
+          [alert addButtonWithTitle:@"Quit"];
+          [alert runModal];
+          exit(1);
+        });
+        return;
       }
     }
 

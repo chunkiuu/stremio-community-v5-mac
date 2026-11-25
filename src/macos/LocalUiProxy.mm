@@ -13,6 +13,7 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -29,6 +30,20 @@ std::thread g_acceptThread;
 std::mutex g_upstreamMutex;
 std::string g_upstreamBase; // https://host[:port] (no trailing slash)
 std::string g_localBase;    // http://127.0.0.1:<port>
+
+// WebKit stores sign-in state by origin. Give each built-in UI its own
+// stable origin without sharing its stored data with another endpoint.
+constexpr uint16_t PortForUpstream(std::string_view upstream) {
+  if (upstream == "https://stremio.zarg.me") return 38471;
+  if (upstream == "https://zaarrg.github.io/stremio-web-shell-fixes") return 38472;
+  if (upstream == "https://web.stremio.com") return 38473;
+  return 0; // Custom endpoints keep an isolated ephemeral origin.
+}
+
+static_assert(PortForUpstream("https://stremio.zarg.me") == 38471);
+static_assert(PortForUpstream("https://zaarrg.github.io/stremio-web-shell-fixes") == 38472);
+static_assert(PortForUpstream("https://web.stremio.com") == 38473);
+static_assert(PortForUpstream("https://stremio.zarg.me/other") == 0);
 
 struct HttpRequest {
   std::string method;
@@ -328,10 +343,12 @@ std::string StartLocalUiProxy(const std::string &upstreamBaseUrl) {
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = 0; // ephemeral port
+  const uint16_t port = PortForUpstream(upstream);
+  addr.sin_port = htons(port);
   if (::bind(listenFd, (sockaddr *)&addr, sizeof(addr)) != 0 ||
       ::listen(listenFd, 64) != 0) {
-    AppendToCrashLog("[PROXY]: bind/listen failed");
+    AppendToCrashLog("[PROXY]: bind/listen failed for port " + std::to_string(port) +
+                     ": " + std::strerror(errno));
     ::close(listenFd);
     return {};
   }

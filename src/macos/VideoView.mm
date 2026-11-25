@@ -6,6 +6,7 @@
 #include <dlfcn.h>
 #include <math.h>
 
+#include <atomic>
 #include <iostream>
 
 #include "Log.h"
@@ -31,6 +32,7 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
   CGLContextObj _cglContext;
   mpv_render_context *_renderContext;
   BOOL _rendererShutdown;
+  GLint _layerFramebuffer;
 }
 
 - (CGLPixelFormatObj)copyCGLPixelFormatForDisplayMask:(uint32_t)mask {
@@ -59,6 +61,7 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
     return nullptr;
   }
   _cglContext = ctx;
+  _layerFramebuffer = 0;
   CGLSetCurrentContext(ctx);
 
   if (!g_mpv) {
@@ -130,16 +133,22 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
   CGLLockContext(ctx);
   CGLSetCurrentContext(ctx);
 
+  GLint viewport[4] = {};
+  glGetIntegerv(GL_VIEWPORT, viewport);
   const CGFloat scale = self.contentsScale > 0 ? self.contentsScale : 1.0;
-  int width = (int)fmax(1.0, self.bounds.size.width * scale);
-  int height = (int)fmax(1.0, self.bounds.size.height * scale);
+  const int width = viewport[2] > 0 ? viewport[2] : (int)fmax(1.0, self.bounds.size.width * scale);
+  const int height = viewport[3] > 0 ? viewport[3] : (int)fmax(1.0, self.bounds.size.height * scale);
 
-  glViewport(0, 0, width, height);
-  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
+  // Core Animation owns the draw target and may temporarily report binding 0.
+  // Remember its last nonzero framebuffer, as mpv's macOS layer does.
+  GLint framebuffer = 0;
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+  if (framebuffer != 0) {
+    _layerFramebuffer = framebuffer;
+  }
 
   mpv_opengl_fbo mpvFbo{};
-  mpvFbo.fbo = 0;
+  mpvFbo.fbo = _layerFramebuffer;
   mpvFbo.w = width;
   mpvFbo.h = height;
   mpvFbo.internal_format = 0;
@@ -150,11 +159,18 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
       {MPV_RENDER_PARAM_FLIP_Y, (void *)&flipY},
       {MPV_RENDER_PARAM_INVALID, nullptr}};
 
-  mpv_render_context_render(_renderContext, params);
+  const int result = mpv_render_context_render(_renderContext, params);
+  if (result < 0) {
+    static std::atomic_flag renderFailureLogged;
+    if (!renderFailureLogged.test_and_set()) {
+      AppendToCrashLog(std::string("[VIDEO]: mpv render failed: ") + mpv_error_string(result));
+    }
+  }
 #ifdef DEBUG_LOG
   static std::atomic<int> draws{0};
   if (draws.fetch_add(1) < 3) {
-    std::cout << "[VIDEO]: drew frame " << width << "x" << height << std::endl;
+    std::cout << "[VIDEO]: framebuffer=" << _layerFramebuffer << " frame=" << width << "x"
+              << height << " status=" << result << std::endl;
   }
 #endif
   CGLFlushDrawable(ctx);
