@@ -24,6 +24,7 @@ void HandleDroppedFilePath(const std::string &filePath);
 void WebShellSetHidden(bool hidden);
 void WebShellTakeSnapshot(const std::string &path);
 bool WebShellDrawsBackground();
+void WebShellSetNativeFullscreen(bool active); // main thread
 
 // Page zoom (View menu), only effective when AllowZoom=1 in the settings.
 void WebShellSetPageZoom(double zoom);

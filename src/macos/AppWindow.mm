@@ -64,6 +64,20 @@ void ApplyPip(bool enable) {
 // -----------------------------------------------------------------------------
 // Main window
 // -----------------------------------------------------------------------------
+@interface ShellWindow : NSWindow
+@end
+
+@implementation ShellWindow
+- (void)noResponderFor:(SEL)eventSelector {
+  NSEvent *event = NSApp.currentEvent;
+  const NSEventModifierFlags modifiers = NSEventModifierFlagCommand | NSEventModifierFlagControl |
+                                        NSEventModifierFlagOption | NSEventModifierFlagShift;
+  if (eventSelector == @selector(keyDown:) && event.type == NSEventTypeKeyDown &&
+      (event.modifierFlags & modifiers) == 0 && [event.characters isEqualToString:@" "]) return;
+  [super noResponderFor:eventSelector];
+}
+@end
+
 void ShellCreateMainWindow() {
   NSRect frame = NSMakeRect(0, 0, 1200, 900);
 
@@ -74,7 +88,7 @@ void ShellCreateMainWindow() {
                        placement.bottom - placement.top);
   }
 
-  g_window = [[NSWindow alloc] initWithContentRect:frame
+  g_window = [[ShellWindow alloc] initWithContentRect:frame
                                          styleMask:kNormalStyle
                                            backing:NSBackingStoreBuffered
                                              defer:NO];
@@ -354,10 +368,24 @@ static NSMenu *BuildMainMenu(ShellMenuTarget *target) {
 
 - (void)windowDidEnterFullScreen:(NSNotification *) __unused notification {
   g_isFullscreen = true;
+  RefreshVideoSurface();
+  WebShellSetNativeFullscreen(true);
 }
 
 - (void)windowDidExitFullScreen:(NSNotification *) __unused notification {
   g_isFullscreen = false;
+  RefreshVideoSurface();
+  WebShellSetNativeFullscreen(false);
+}
+
+- (void)windowDidFailToEnterFullScreen:(NSWindow *) __unused window {
+  g_isFullscreen = false;
+  WebShellSetNativeFullscreen(false);
+}
+
+- (void)windowDidFailToExitFullScreen:(NSWindow *) __unused window {
+  g_isFullscreen = true;
+  WebShellSetNativeFullscreen(true);
 }
 
 @end

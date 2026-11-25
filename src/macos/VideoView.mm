@@ -36,6 +36,7 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
 }
 
 - (CGLPixelFormatObj)copyCGLPixelFormatForDisplayMask:(uint32_t)mask {
+  if (_cglContext) return CGLRetainPixelFormat(CGLGetPixelFormat(_cglContext));
   const CGLPixelFormatAttribute attribs[] = {
       kCGLPFAOpenGLProfile, (CGLPixelFormatAttribute)kCGLOGLPVersion_3_2_Core,
       kCGLPFADoubleBuffer,
@@ -55,12 +56,15 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
 }
 
 - (CGLContextObj)copyCGLContextForPixelFormat:(CGLPixelFormatObj)pixelFormat {
+  // Core Animation can request the context again when the window enters a
+  // fullscreen Space. libmpv's textures belong to the original context.
+  if (_cglContext) return CGLRetainContext(_cglContext);
   CGLContextObj ctx = nullptr;
   if (CGLCreateContext(pixelFormat, nullptr, &ctx) != kCGLNoError) {
     AppendToCrashLog("[VIDEO]: CGLCreateContext failed");
     return nullptr;
   }
-  _cglContext = ctx;
+  _cglContext = CGLRetainContext(ctx);
   _layerFramebuffer = 0;
   CGLSetCurrentContext(ctx);
 
@@ -105,15 +109,9 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
 
 - (void)renderTick {
   if (!_renderContext || _rendererShutdown) return;
-  CGLSetCurrentContext(_cglContext);
-  uint64_t flags = mpv_render_context_update(_renderContext);
-  if (flags & MPV_RENDER_UPDATE_FRAME) {
-#ifdef DEBUG_LOG
-    static std::atomic<int> updates{0};
-    if (updates.fetch_add(1) < 3) std::cout << "[VIDEO]: update frame" << std::endl;
-#endif
-    [self setNeedsDisplay];
-  }
+  // With advanced control disabled, the update callback can simply schedule
+  // a draw. Core Animation makes the context current on its draw thread.
+  [self setNeedsDisplay];
 }
 
 - (BOOL)canDrawInCGLContext:(CGLContextObj) __unused ctx
@@ -199,6 +197,7 @@ void *GLGetProcAddress(void * /*ctx*/, const char *name) {
 
 - (void)dealloc {
   [self shutdownRenderer];
+  if (_cglContext) CGLReleaseContext(_cglContext);
 }
 
 @end
@@ -233,6 +232,10 @@ static __weak MPVVideoView *g_videoView = nil;
 
 - (void)viewDidChangeBackingProperties {
   [super viewDidChangeBackingProperties];
+  [self refreshVideoSurface];
+}
+
+- (void)refreshVideoSurface {
   _videoLayer.contentsScale = self.window ? self.window.backingScaleFactor : 1.0;
   _videoLayer.frame = self.bounds;
   [_videoLayer setNeedsDisplay];
@@ -251,6 +254,10 @@ static __weak MPVVideoView *g_videoView = nil;
 }
 
 @end
+
+void RefreshVideoSurface() {
+  [g_videoView refreshVideoSurface];
+}
 
 void ShutdownRenderer() {
   MPVVideoView *view = g_videoView;

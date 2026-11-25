@@ -6,5 +6,8 @@
 @interface MPVVideoView : NSView
 
 - (void)shutdownRenderer;
+- (void)refreshVideoSurface;
 
 @end
+
+void RefreshVideoSurface(); // main thread

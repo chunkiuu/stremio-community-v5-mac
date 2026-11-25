@@ -169,6 +169,55 @@ try {
 };
 )JS";
 
+// Keep WKWebView and the native mpv view in the same window when the player
+// requests fullscreen. The web UI's fullscreen hook still gets DOM events.
+static const char *kMacPlayerControlsScript = R"JS(
+(function () {
+    const native = window.webkit.messageHandlers.stremioFullscreen;
+    let fullscreen = false;
+    const nativeRequest = Element.prototype.requestFullscreen;
+    Element.prototype.requestFullscreen = function (...args) {
+        if (this !== document.documentElement) {
+            return nativeRequest
+                ? nativeRequest.apply(this, args)
+                : Promise.reject(new TypeError('Fullscreen is only available for the app window'));
+        }
+        native.postMessage(true);
+        return Promise.resolve();
+    };
+    Object.defineProperty(document, 'fullscreenElement', {
+        configurable: true,
+        get: () => fullscreen ? document.documentElement : null
+    });
+    document.exitFullscreen = function () {
+        native.postMessage(false);
+        return Promise.resolve();
+    };
+    window.__stremioSetNativeFullscreen = function (active) {
+        if (fullscreen === active) return;
+        fullscreen = active;
+        (document.documentElement || document).dispatchEvent(
+            new Event('fullscreenchange', { bubbles: true })
+        );
+    };
+
+    window.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+        if (event.key === 'Escape' && fullscreen) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            document.exitFullscreen();
+        }
+        if (event.code !== 'Space' || event.shiftKey || !/^#\/player(?:\/|$)/.test(location.hash)) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && (target.isContentEditable ||
+            target.closest('input, textarea, select, [role="textbox"]'))) return;
+        // The web player's keydown handler still toggles play/pause.
+        event.preventDefault();
+    }, true);
+})();
+)JS";
+
 // Same script as src/webview/webview.cpp (INJECTED_KEYDOWN_SCRIPT).
 static const char *kInjectedKeydownScript = R"JS(
 (function() {
@@ -345,6 +394,16 @@ void MaybeNavigateToWebUi();
 
 - (void)userContentController:(WKUserContentController *) __unused controller
       didReceiveScriptMessage:(WKScriptMessage *)message {
+  if ([message.name isEqualToString:@"stremioFullscreen"]) {
+    if (!message.frameInfo.isMainFrame || ![message.body isKindOfClass:[NSNumber class]]) return;
+    NSURL *source = message.frameInfo.request.URL;
+    NSURL *ui = [NSURL URLWithString:Utf8ToNs(g_webuiUrl)];
+    if ([source.scheme isEqualToString:ui.scheme] && [source.host isEqualToString:ui.host] &&
+        (source.port == ui.port || [source.port isEqualToNumber:ui.port])) {
+      shell::ToggleFullScreen([(NSNumber *)message.body boolValue]);
+    }
+    return;
+  }
   if (![message.body isKindOfClass:[NSString class]]) return;
   if ([message.name isEqualToString:@"stremioConsole"]) {
     std::cout << "[JS console] " << NsToUtf8((NSString *)message.body) << std::endl;
@@ -389,6 +448,7 @@ void MaybeNavigateToWebUi();
     Evaluate(kInjectedButtonScript);
   }
   Evaluate(kExecShellScript);
+  WebShellSetNativeFullscreen(g_isFullscreen);
 
 #ifdef DEBUG_LOG
   [webView evaluateJavaScript:@"JSON.stringify({chrome: typeof window.chrome, qt: typeof window.qt, initShellComm: typeof window.initShellComm, url: location.href})"
@@ -651,6 +711,12 @@ void Reload(bool clearCache) {
 }
 
 } // namespace shell
+
+void WebShellSetNativeFullscreen(bool active) {
+  NSString *script = active ? @"window.__stremioSetNativeFullscreen?.(true)"
+                            : @"window.__stremioSetNativeFullscreen?.(false)";
+  [g_webView evaluateJavaScript:script completionHandler:nil];
+}
 
 bool WebShellDrawsBackground() {
   id value = [g_webView valueForKey:@"drawsBackground"];
@@ -963,6 +1029,10 @@ void AddScripts(WKUserContentController *userContentController) {
     return;
   }
   [userContentController
+      addUserScript:[[WKUserScript alloc] initWithSource:Script(kMacPlayerControlsScript)
+                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                      forMainFrameOnly:YES]];
+  [userContentController
       addUserScript:[[WKUserScript alloc] initWithSource:Script(kExecShellScript)
                                          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                       forMainFrameOnly:NO]];
@@ -1031,7 +1101,7 @@ bool InitWebShell() {
   g_config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
   g_config.preferences.javaScriptCanOpenWindowsAutomatically = YES;
   if (@available(macOS 10.12, *)) {
-    g_config.preferences.elementFullscreenEnabled = YES;
+    g_config.preferences.elementFullscreenEnabled = NO;
   }
 
   // Extensions must be attached to the configuration before the web view is
@@ -1067,6 +1137,7 @@ bool InitWebShell() {
   g_webController = [[ShellWebController alloc] init];
   proxy.target = g_webController;
   [g_config.userContentController addScriptMessageHandler:proxy name:@"stremioShell"];
+  [g_config.userContentController addScriptMessageHandler:proxy name:@"stremioFullscreen"];
 #ifdef DEBUG_LOG
   [g_config.userContentController addScriptMessageHandler:proxy name:@"stremioConsole"];
   [g_config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:Script(kConsoleForwardScript)
